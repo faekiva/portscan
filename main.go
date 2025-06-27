@@ -97,7 +97,7 @@ func scanPorts(ctx context.Context, in <-chan int) chan string {
 }
 
 func scanPort(port int) string {
-	addr := fmt.Sprintf("%s:%d", *host, port)
+	addr := net.JoinHostPort(*host, fmt.Sprintf("%d", port))
 	conn, err := net.DialTimeout("tcp", addr, *timeout)
 	if err != nil {
 		return fmt.Sprintf("%d: %s", port, err.Error())
