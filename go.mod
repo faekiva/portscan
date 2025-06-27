@@ -1,4 +1,4 @@
-module github.com/ancientlore/portscan
+module github.com/faekiva/portscan
 
 go 1.24
 
