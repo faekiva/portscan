@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -13,23 +12,24 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/alexflint/go-arg"
 )
 
-var (
-	host     = flag.String("host", "localhost", "Host or IP to scan")
-	timeout  = flag.Duration("timeout", 1*time.Second, "Timeout per port")
-	ports    = flag.String("range", "80,443", "Port ranges e.g. 80,443,200-1000,8000-9000")
-	threads  = flag.Int("threads", 100, "Threads to use")
-	showErrs = flag.Bool("verbose", false, "Show errors for failed ports")
-)
+type program struct {
+	Host    string        `arg:"positional" help:"Host or IP to scan" default:"localhost"`
+	Ports   []string      `arg:"positional" help:"Port ranges to scan, eg 80 443 200-1000. Defaults to 22-9999 if not specified"`
+	Timeout time.Duration `arg:"--timeout" help:"Timeout per port" default:"1s"`
+	Threads int           `arg:"--threads" help:"Threads to use" default:"100"`
+	Verbose bool          `arg:"-v,--verbose" help:"Show errors for failed ports" default:"false"`
+}
 
-func processRange(ctx context.Context, r string) chan int {
+func processRange(ctx context.Context, ports []string) chan int {
 	c := make(chan int)
 	done := ctx.Done()
 	go func() {
 		defer close(c)
-		blocks := strings.Split(r, ",")
-		for _, block := range blocks {
+		for _, block := range ports {
 			rg := strings.Split(block, "-")
 			if len(rg) != 1 && len(rg) != 2 {
 				log.Print("Cannot interpret range: ", block)
@@ -63,12 +63,12 @@ func processRange(ctx context.Context, r string) chan int {
 	return c
 }
 
-func scanPorts(ctx context.Context, in <-chan int) chan string {
+func (p program) scanPorts(ctx context.Context, in <-chan int) chan string {
 	out := make(chan string)
 	done := ctx.Done()
 	var wg sync.WaitGroup
-	wg.Add(*threads)
-	for i := 0; i < *threads; i++ {
+	wg.Add(p.Threads)
+	for i := 0; i < p.Threads; i++ {
 		go func() {
 			defer wg.Done()
 			for {
@@ -77,7 +77,7 @@ func scanPorts(ctx context.Context, in <-chan int) chan string {
 					if !ok {
 						return
 					}
-					s := scanPort(port)
+					s := p.scanPort(port)
 					select {
 					case out <- s:
 					case <-done:
@@ -96,9 +96,9 @@ func scanPorts(ctx context.Context, in <-chan int) chan string {
 	return out
 }
 
-func scanPort(port int) string {
-	addr := net.JoinHostPort(*host, fmt.Sprintf("%d", port))
-	conn, err := net.DialTimeout("tcp", addr, *timeout)
+func (p program) scanPort(port int) string {
+	addr := net.JoinHostPort(p.Host, fmt.Sprintf("%d", port))
+	conn, err := net.DialTimeout("tcp", addr, p.Timeout)
 	if err != nil {
 		return fmt.Sprintf("%d: %s", port, err.Error())
 	}
@@ -107,16 +107,21 @@ func scanPort(port int) string {
 }
 
 func main() {
-	flag.Parse()
+	var args program
+	arg.MustParse(&args)
+	if len(args.Ports) == 0 {
+		args.Ports = []string{"22-9999"} // Default range if none specified
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	fmt.Printf("Scanning %s ports %s timeout %s threads %d\n", *host, *ports, (*timeout).String(), *threads)
+	fmt.Printf("Scanning %s ports %s timeout %s threads %d\n", args.Host, args.Ports, args.Timeout, args.Threads)
 
-	c := processRange(ctx, *ports)
-	s := scanPorts(ctx, c)
+	c := processRange(ctx, args.Ports)
+	s := args.scanPorts(ctx, c)
 	for x := range s {
-		if *showErrs || strings.HasSuffix(x, ": OK") {
+		if args.Verbose || strings.HasSuffix(x, ": OK") {
 			fmt.Println(x)
 		}
 	}
